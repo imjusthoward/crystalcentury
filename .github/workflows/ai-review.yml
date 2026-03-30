@@ -1,0 +1,181 @@
+name: AI Review Pipeline
+
+on:
+  push:
+    branches:
+      - 'claude/**'
+      - 'feat/**'
+      - 'fix/**'
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  # ── 1. Auto-create PR if push came from a branch with no open PR ──────────
+  open-pr:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    outputs:
+      pr_number: ${{ steps.find-or-create.outputs.pr_number }}
+    steps:
+      - name: Find or create PR
+        id: find-or-create
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BRANCH: ${{ github.ref_name }}
+          REPO:   ${{ github.repository }}
+        run: |
+          # Check if a PR already exists for this branch
+          EXISTING=$(gh pr list --repo "$REPO" --head "$BRANCH" --json number --jq '.[0].number' 2>/dev/null)
+          if [ -n "$EXISTING" ] && [ "$EXISTING" != "null" ]; then
+            echo "pr_number=$EXISTING" >> "$GITHUB_OUTPUT"
+            echo "PR #$EXISTING already exists"
+          else
+            # Determine base branch
+            BASE="main"
+            if [[ "$BRANCH" == claude/* ]]; then
+              # Target Codex's active feature branch if it exists, else main
+              FEAT=$(gh pr list --repo "$REPO" --head "feat/premier-trophy-storefront-polish" --json number --jq '.[0].number' 2>/dev/null)
+              if [ -n "$FEAT" ]; then BASE="feat/premier-trophy-storefront-polish"; fi
+            fi
+
+            ACTOR="${GITHUB_ACTOR}"
+            BOT_LABEL="claude"
+            if [[ "$BRANCH" == feat/* ]]; then BOT_LABEL="codex"; fi
+
+            PR_NUM=$(gh pr create \
+              --repo "$REPO" \
+              --head "$BRANCH" \
+              --base "$BASE" \
+              --title "[${BOT_LABEL}] $(git log -1 --pretty='%s' 2>/dev/null || echo 'Auto PR')" \
+              --body "Auto-created by AI Review Pipeline for branch \`$BRANCH\`." \
+              --json number --jq '.number')
+            echo "pr_number=$PR_NUM" >> "$GITHUB_OUTPUT"
+            echo "Created PR #$PR_NUM"
+          fi
+
+  # ── 2. Request Copilot review on every PR event ───────────────────────────
+  copilot-review:
+    if: always()
+    needs: [open-pr]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve PR number
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PUSH_PR: ${{ needs.open-pr.outputs.pr_number }}
+          EVENT_PR: ${{ github.event.pull_request.number }}
+        run: |
+          PR="${EVENT_PR:-$PUSH_PR}"
+          echo "number=$PR" >> "$GITHUB_OUTPUT"
+
+      - name: Request Copilot review
+        if: steps.pr.outputs.number != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR:   ${{ steps.pr.outputs.number }}
+        run: |
+          # Copilot review request — works once Copilot Code Review is enabled
+          # in repo Settings → Copilot → Code review
+          gh api \
+            repos/$REPO/pulls/$PR/requested_reviewers \
+            --method POST \
+            -f "reviewers[]=copilot-pull-request-reviewer[bot]" \
+            --silent 2>/dev/null || true
+
+          # Fallback: use the newer Copilot review endpoint if available
+          gh api \
+            repos/$REPO/pulls/$PR/reviews \
+            --method POST \
+            -f event=COMMENT \
+            -f body="@github-copilot review" \
+            --silent 2>/dev/null || true
+
+          echo "Copilot review requested on PR #$PR"
+
+  # ── 3. Post a Codex-ready review prompt as a PR comment ───────────────────
+  codex-prompt:
+    if: always()
+    needs: [open-pr, copilot-review]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve PR number
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PUSH_PR: ${{ needs.open-pr.outputs.pr_number }}
+          EVENT_PR: ${{ github.event.pull_request.number }}
+        run: |
+          PR="${EVENT_PR:-$PUSH_PR}"
+          echo "number=$PR" >> "$GITHUB_OUTPUT"
+
+      - name: Check if Codex prompt already posted
+        id: check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR:   ${{ steps.pr.outputs.number }}
+        run: |
+          EXISTS=$(gh api repos/$REPO/issues/$PR/comments \
+            --jq '[.[] | select(.body | contains("<!-- codex-review-prompt -->"))] | length')
+          echo "exists=$EXISTS" >> "$GITHUB_OUTPUT"
+
+      - name: Get diff summary
+        id: diff
+        run: |
+          BASE=$(git merge-base HEAD origin/main 2>/dev/null || echo "HEAD~1")
+          SUMMARY=$(git diff --stat "$BASE"..HEAD 2>/dev/null | tail -1)
+          FILES=$(git diff --name-only "$BASE"..HEAD 2>/dev/null | head -10 | tr '\n' ', ')
+          echo "summary=$SUMMARY" >> "$GITHUB_OUTPUT"
+          echo "files=$FILES" >> "$GITHUB_OUTPUT"
+
+      - name: Post Codex review prompt
+        if: steps.check.outputs.exists == '0' && steps.pr.outputs.number != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR:   ${{ steps.pr.outputs.number }}
+          BRANCH: ${{ github.ref_name }}
+          DIFF_SUMMARY: ${{ steps.diff.outputs.summary }}
+          CHANGED_FILES: ${{ steps.diff.outputs.files }}
+          PR_URL: ${{ github.server_url }}/${{ github.repository }}/pull/${{ steps.pr.outputs.number }}
+        run: |
+          ACTOR="${GITHUB_ACTOR}"
+          BOT="Claude"
+          if [[ "$BRANCH" == feat/* ]]; then BOT="Codex"; fi
+
+          gh api repos/$REPO/issues/$PR/comments --method POST -f body="<!-- codex-review-prompt -->
+          ## 🤖 Codex Review Request
+
+          **Branch:** \`$BRANCH\` — authored by **$BOT**
+          **Changed:** $DIFF_SUMMARY
+          **Files:** $CHANGED_FILES
+
+          ---
+
+          Hey Codex — please review this PR before merging or deploying:
+
+          \`\`\`
+          Review PR: $PR_URL
+
+          Focus areas:
+          1. Does this conflict with anything in child-theme/functions.php on feat/premier-trophy-storefront-polish?
+          2. Are there any WordPress hook priority conflicts?
+          3. Does the change need a matching update to the deploy script (Deploy-LiveCustomCode.ps1)?
+          4. Any edge cases in the WooCommerce / WPML routing logic?
+          \`\`\`
+
+          Once reviewed, either approve and merge, or push a fix commit to \`$BRANCH\`."
