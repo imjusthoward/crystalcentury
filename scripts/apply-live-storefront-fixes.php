@@ -483,6 +483,42 @@ function cc_sync_category_thumbnails( $backup_dir ) {
 	return count( $backups );
 }
 
+function cc_normalize_en_category_terms( $backup_dir ) {
+	$updates = [
+		342 => [ 'name' => 'Promotional Gift' ],
+		348 => [ 'name' => 'Pin Badge' ],
+	];
+
+	$backups = [];
+
+	foreach ( $updates as $term_id => $payload ) {
+		$term = get_term( (int) $term_id, 'product_cat' );
+		if ( ! $term instanceof WP_Term || is_wp_error( $term ) ) {
+			continue;
+		}
+
+		$backups[ $term_id ] = [
+			'name'        => $term->name,
+			'slug'        => $term->slug,
+			'description' => $term->description,
+		];
+
+		wp_update_term(
+			(int) $term_id,
+			'product_cat',
+			[
+				'name' => $payload['name'],
+			]
+		);
+	}
+
+	if ( $backups ) {
+		cc_backup_payload( $backup_dir, 'en-category-terms-before.json', $backups );
+	}
+
+	return count( $backups );
+}
+
 function cc_patch_broken_catalog_media( $backup_dir ) {
 	$placeholder_id = 40076;
 	$targets        = [ 39454, 39456, 39466, 39468 ];
@@ -793,6 +829,7 @@ if ( $product_backups ) {
 }
 
 $normalized_en_products = cc_normalize_en_products( $backup_dir );
+$normalized_en_categories = cc_normalize_en_category_terms( $backup_dir );
 $updated_category_thumbnails = cc_sync_category_thumbnails( $backup_dir );
 $patched_catalog_media       = cc_patch_broken_catalog_media( $backup_dir );
 $footer_template_id          = cc_upsert_footer_template( $backup_dir );
@@ -809,6 +846,7 @@ echo 'homepage_pages=' . count( $page_backups ) . PHP_EOL;
 echo 'brand_pages=' . count( $brand_page_backups ) . PHP_EOL;
 echo 'decoded_products=' . count( $product_backups ) . PHP_EOL;
 echo 'normalized_en_products=' . $normalized_en_products . PHP_EOL;
+echo 'normalized_en_categories=' . $normalized_en_categories . PHP_EOL;
 echo 'updated_category_thumbnails=' . $updated_category_thumbnails . PHP_EOL;
 echo 'patched_catalog_media=' . $patched_catalog_media . PHP_EOL;
 echo 'footer_template_id=' . $footer_template_id . PHP_EOL;

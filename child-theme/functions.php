@@ -941,7 +941,38 @@ add_filter( 'woocommerce_product_get_gallery_image_ids', function ( $image_ids, 
         return $image_ids;
     }
 
-    return cc_fallback_media_url_for_product( $product->get_id() ) ? [] : $image_ids;
+    if ( cc_fallback_media_url_for_product( $product->get_id() ) ) {
+        return [];
+    }
+
+    $featured_id  = (int) $product->get_image_id();
+    $featured_url = $featured_id ? wp_get_attachment_image_url( $featured_id, 'full' ) : '';
+    $deduped      = [];
+    $seen_urls    = [];
+
+    foreach ( array_map( 'intval', (array) $image_ids ) as $image_id ) {
+        if ( ! $image_id ) {
+            continue;
+        }
+
+        $url = wp_get_attachment_image_url( $image_id, 'full' );
+        if ( ! $url ) {
+            continue;
+        }
+
+        if ( $featured_url && $url === $featured_url ) {
+            continue;
+        }
+
+        if ( isset( $seen_urls[ $url ] ) ) {
+            continue;
+        }
+
+        $seen_urls[ $url ] = true;
+        $deduped[]         = $image_id;
+    }
+
+    return $deduped;
 }, 20, 2 );
 
 add_action( 'wp_footer', function () {
