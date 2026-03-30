@@ -1567,6 +1567,11 @@ function cc_filter_frontend_markup( $html ) {
     $html = str_replace( '報價直線21513944', $phone_text, $html );
     $html = str_replace( 'Need help?', $help_text, $html );
     $html = str_replace( 'Let’s talk ', $call_text, $html );
+    $html = str_replace(
+        'id="elementor-menu-cart__toggle_button" href="#"',
+        'id="elementor-menu-cart__toggle_button" href="' . esc_url( wc_get_cart_url() ) . '"',
+        $html
+    );
 
     if ( cc_is_en() ) {
         $html = str_replace( [ 'href="https://www.crystalcentury.com/shop/"', "href='https://www.crystalcentury.com/shop/'" ], [ 'href="https://www.crystalcentury.com/shop/?lang=en"', "href='https://www.crystalcentury.com/shop/?lang=en'" ], $html );
@@ -1591,10 +1596,19 @@ function cc_filter_frontend_markup( $html ) {
             '查詢' => 'Submit enquiry',
             'Visit product category Commemorative Gift' => 'Visit product category Promotional Gift',
             'Commemorative Gift (' => 'Promotional Gift (',
+            '>Commemorative Gift<' => '>Promotional Gift<',
+            'alt="Commemorative Gift"' => 'alt="Promotional Gift"',
             'Visit product category Pin' => 'Visit product category Pin Badge',
+            '>Pin<' => '>Pin Badge<',
+            'alt="Pin"' => 'alt="Pin Badge"',
         ];
 
         $html = str_replace( array_keys( $replacements ), array_values( $replacements ), $html );
+
+        if ( is_shop() ) {
+            $html = str_replace( 'Commemorative Gift</h2>', 'Promotional Gift</h2>', $html );
+            $html = str_replace( 'Pin</h2>', 'Pin Badge</h2>', $html );
+        }
     }
 
     if ( is_page( [ 38309, 41116 ] ) ) {
