@@ -1,4 +1,4 @@
-# crystalcentury-site
+# crystalcentury
 
 Operational source of truth for `crystalcentury.com`.
 
