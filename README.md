@@ -1,6 +1,10 @@
 # crystalcentury
 
-Operational source of truth for `crystalcentury.com`.
+Operational source of truth for [crystalcentury.com](https://crystalcentury.com).
+
+## Live
+
+- Site: https://crystalcentury.com
 
 This repo intentionally tracks only the parts of the WordPress stack that benefit from version control:
 
