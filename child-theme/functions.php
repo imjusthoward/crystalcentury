@@ -3,6 +3,19 @@
  * Hello Elementor Child — functions.php
  */
 
+// ── Suppress WPML-Elementor E_WARNING spam (known compatibility noise) ────────
+// WPML iterates Elementor data that can have null elements in some widget types;
+// these warnings flood the error log but are non-fatal and produce no frontend impact.
+set_error_handler( function ( $errno, $errstr, $errfile ) {
+    if ( $errno === E_WARNING
+        && strpos( $errfile, 'sitepress-multilingual-cms' ) !== false
+        && strpos( $errfile, 'Elementor' ) !== false
+    ) {
+        return true;
+    }
+    return false;
+}, E_WARNING );
+
 remove_action( 'wp_head', 'wp_generator' );
 
 // ── Stylesheets ──────────────────────────────────────────────────────────────
@@ -487,6 +500,56 @@ add_filter( 'wpseo_schema_website', function ( $data ) {
     return $data;
 } );
 
+// ── Product schema (Yoast free doesn't emit Product type without WC SEO plugin) ─
+add_action( 'wp_head', function () {
+    if ( ! is_product() ) {
+        return;
+    }
+    global $product;
+    if ( ! $product instanceof WC_Product ) {
+        $product = wc_get_product( get_the_ID() );
+    }
+    if ( ! $product ) {
+        return;
+    }
+
+    $name        = get_the_title();
+    $desc        = wp_strip_all_tags( $product->get_short_description() ?: $product->get_description() );
+    $url         = get_permalink();
+    $image_id    = $product->get_image_id();
+    $image_url   = $image_id ? wp_get_attachment_url( $image_id ) : '';
+    $org_id      = home_url( '/#organization' );
+    $brand_name  = cc_company_name();
+
+    $schema = [
+        '@context' => 'https://schema.org',
+        '@type'    => 'Product',
+        'name'     => $name,
+        'url'      => $url,
+        'brand'    => [ '@type' => 'Brand', 'name' => $brand_name ],
+        'seller'   => [ '@id' => $org_id ],
+        'offers'   => [
+            '@type'           => 'Offer',
+            'url'             => $url,
+            'priceCurrency'   => 'HKD',
+            'price'           => '0',
+            'availability'    => 'https://schema.org/InStock',
+            'itemCondition'   => 'https://schema.org/NewCondition',
+            'seller'          => [ '@id' => $org_id ],
+        ],
+    ];
+
+    if ( $desc ) {
+        $schema['description'] = $desc;
+    }
+
+    if ( $image_url ) {
+        $schema['image'] = $image_url;
+    }
+
+    echo '<script type="application/ld+json">' . wp_json_encode( $schema, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES ) . '</script>' . "\n";
+}, 10 );
+
 add_filter( 'wpseo_schema_webpage', function ( $data ) {
     if ( ! is_array( $data ) ) {
         return $data;
@@ -856,6 +919,16 @@ add_action( 'wp', function () {
     }
 
     remove_action( 'woocommerce_archive_description', 'woocommerce_product_archive_description', 10 );
+    // Belt-and-suspenders: suppress WooCommerce term_description output when a custom intro exists.
+    add_filter( 'term_description', function ( $description ) {
+        if ( is_product_category() ) {
+            $copy = cc_product_category_copy();
+            if ( $copy && ! empty( $copy['intro'] ) ) {
+                return '';
+            }
+        }
+        return $description;
+    }, 5 );
     add_action( 'woocommerce_archive_description', function () {
         if ( is_product_category() ) {
             $copy = cc_product_category_copy();
